@@ -1,0 +1,205 @@
+import numpy as np
+import pandas as pd
+import math
+
+
+def load_day(day):
+    header = ['timestamp', 'line_id', 'direction', 'jrny_patt_id', 'time_frame', 'journey_id', 'operator',
+              'congestion', 'lon', 'lat', 'delay', 'block_id', 'vehicle_id', 'stop_id', 'at_stop']
+    types = {'timestamp': np.int64,
+             'journey_id': np.int32,
+             'congestion': np.int8,
+             'lon': np.float64,
+             'lat': np.float64,
+             'delay': np.int8,
+             'vehicle_id': np.int32,
+             'at_stop': np.int8}
+    file_name = 'data/siri.201301{0:02d}.csv'.format(day)
+    df = pd.read_csv(file_name, header=None, names=header, dtype=types, parse_dates=['time_frame'], infer_datetime_format=True)
+    null_replacements = {'line_id': 0, 'stop_id': 0}
+    df = df.fillna(value=null_replacements)
+    df['line_id'] = df['line_id'].astype(np.int32)
+    df['stop_id'] = df['stop_id'].astype(np.int32)
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='us')
+    return df
+
+
+def haversine_np(lon1, lat1, lon2, lat2):
+    """
+    Calculate the great circle distance between two points
+    on the earth (specified in decimal degrees)
+
+    All args must be of equal length.
+    Taken from here: https://stackoverflow.com/questions/29545704/fast-haversine-approximation-python-pandas#29546836
+    """
+    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+
+    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
+
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+    meters = 6378137.0 * c
+    return meters
+
+
+def calculate_durations(data_frame, vehicle_id):
+    one_second = np.timedelta64(1000000000, 'ns')
+    dv = data_frame[data_frame['vehicle_id'] == vehicle_id]
+    ts = dv.timestamp.values
+    dtd = ts[1:] - ts[:-1]
+    dt = np.zeros(len(dtd) + 1)
+    dt[1:] = dtd / one_second
+    return dt
+
+
+def calculate_distances(data_frame, vehicle_id):
+    dv = data_frame[data_frame['vehicle_id']==vehicle_id]
+    lat = dv.lat.values
+    lon = dv.lon.values
+    dxm = haversine_np(lon[1:], lat[1:], lon[:-1], lat[:-1])
+    dx = np.zeros(len(dxm) + 1)
+    dx[1:] = dxm
+    return dx
+
+
+def delta_location(lat, lon, bearing, meters):
+    delta = meters / 6378137.0
+    theta = math.radians(bearing)
+    lat_r = math.radians(lat)
+    lon_r = math.radians(lon)
+    lat_r2 = math.asin(math.sin(lat_r) * math.cos(delta) + math.cos(lat_r) * math.sin(delta) * math.cos(theta))
+    lon_r2 = lon_r + math.atan2(math.sin(theta) * math.sin(delta) * math.cos(lat_r), math.cos(delta) - math.sin(lat_r) * math.sin(lat_r2))
+    return math.degrees(lat_r2), math.degrees(lon_r2)
+
+
+def x_meters_to_degrees(meters, lat, lon):
+    _, lon2 = delta_location(lat, lon, 90, meters)
+    return abs(lon - lon2)
+
+
+def y_meters_to_degrees(meters, lat, lon):
+    lat2, _ = delta_location(lat, lon, 0, meters)
+    return abs(lat - lat2)
+
+
+def calculate_q(lat, lon, sigma_speed):
+    q = np.zeros((4, 4), dtype=np.float)
+    q[2, 2] = x_meters_to_degrees(sigma_speed, lat, lon) ** 2
+    q[3, 3] = y_meters_to_degrees(sigma_speed, lat, lon) ** 2
+    return q
+
+
+def calculate_r(lat, lon, sigma):
+    r = np.zeros((2, 2), dtype=np.float)
+    r[0, 0] = x_meters_to_degrees(lat, lon, sigma)
+    r[1, 1] = y_meters_to_degrees(lat, lon, sigma)
+    return r
+
+
+def calculate_p(lat, lon, sigma, sigma_speed):
+    p = np.zeros((4, 4), dtype=np.float)
+    p[0, 0] = x_meters_to_degrees(sigma, lat, lon) ** 2
+    p[1, 1] = y_meters_to_degrees(sigma, lat, lon) ** 2
+    p[2, 2] = x_meters_to_degrees(sigma_speed, lat, lon) ** 2
+    p[3, 3] = y_meters_to_degrees(sigma_speed, lat, lon) ** 2
+    return p
+
+
+def calculate_phi(dt):
+    """
+    Calculates the Φ matrix
+    :param dt: Δtᵢ
+    :return: The Φ matrix
+    """
+    phi = np.eye(4)
+    phi[0, 2] = dt
+    phi[1, 3] = dt
+    return phi
+
+
+def calculate_kalman_gain(p, c, r):
+    num = np.matmul(p, np.transpose(c))
+    den = np.matmul(c, num) + r
+    return np.matmul(num, np.linalg.pinv(den))
+
+
+def predict_step(prev_x, prev_p, phi, sigma_speed):
+    lon = prev_x[0, 0]
+    lat = prev_x[1, 0]
+    next_x = np.matmul(phi, prev_x)
+    next_p = np.matmul(np.matmul(phi, prev_p), np.transpose(phi)) + calculate_q(lat, lon, sigma_speed)
+    return next_x, next_p
+
+
+def update_step(predicted_x, predicted_p, c, y, sigma_x):
+    lon = predicted_x[0, 0]
+    lat = predicted_x[1, 0]
+    r = calculate_r(lat, lon, sigma_x)
+    k = calculate_kalman_gain(predicted_p, c, r)
+    updated_x = predicted_x + np.matmul(k, y - np.matmul(c, predicted_x))
+    identity = np.eye(4)
+    updated_p = np.matmul(identity - np.matmul(k, c), predicted_p)
+    return updated_x, updated_p
+
+
+def read_row(t, i):
+    r = np.zeros((4, 1), dtype=np.float)
+    r[0, 0] = t[i, 1]
+    r[1, 0] = t[i, 2]
+    return r
+
+
+def read_observation(t, i):
+    r = np.zeros((2, 1), dtype=np.float)
+    r[0, 0] = t[i, 1]
+    r[1, 0] = t[i, 2]
+    return r
+
+
+def get_line_text(lon0, lat0, lon1, lat1):
+    return "\"LINE({0} {1}, {2}, {3})\"".format(lon0, lat0, lon1, lat1)
+
+
+def run():
+    day = load_day(1)
+    vehicles = day['vehicle_id'].unique()
+
+    trajectories = {}
+
+    for v in vehicles:
+        vehicle_selector = day['vehicle_id'] == v
+        day.loc[vehicle_selector, 'dt'] = calculate_durations(day, v)
+        day.loc[vehicle_selector, 'dx'] = calculate_distances(day, v)
+
+        trajectories[v] = day.loc[vehicle_selector, ['dt', 'lon', 'lat']].values
+
+    t = trajectories[33160]
+
+    prev_x = read_row(t, 0)
+    lat = prev_x[1, 0]
+    lon = prev_x[0, 0]
+    sigma_x = 0.1
+    sigma_s = 0.1
+    c = np.zeros((2, 4), dtype=np.float)
+    c[0, 0] = 1.0
+    c[1, 1] = 1.0
+    prev_p = calculate_p(lat, lon, sigma_x, sigma_s)
+
+    # print("observed, filtered")
+    print("lat_obs, lon_obs, lat_flt, lon_flt")
+
+    for i in range(1, t.shape[0]):
+        y = read_observation(t, i)
+        phi = calculate_phi(t[i, 0])
+        next_x, next_p = predict_step(prev_x, prev_p, phi, sigma_s)
+        updated_x, updated_p = update_step(next_x, next_p, c, y, sigma_x)
+
+        print("{0}, {1}, {2}, {3}".format(y[1, 0],  y[0, 0], updated_x[1, 0], updated_x[0, 0]))
+
+        prev_x, prev_p = updated_x, updated_p
+
+
+if __name__ == "__main__":
+    run()
