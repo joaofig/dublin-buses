@@ -17,9 +17,9 @@ def load_day(month):
 
 def run():
     df = load_day(1)
-    trip = df.loc[df['vehicle_id'] == 33521, ['timestamp', 'lat', 'lon', 'stop']]
+    trip = df.loc[df['vehicle_id'] == 33142, ['timestamp', 'lat', 'lon', 'stop']]
     stop = trip.loc[trip['stop'] == 1, ['timestamp', 'lat', 'lon']]
-    # print(trip.head())
+    print.head())
 
     plt.plot(stop['lon'], stop['lat'], 'rs')
     print(stop.head())
