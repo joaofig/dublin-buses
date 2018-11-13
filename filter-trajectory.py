@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 import math
+import matplotlib.pyplot as plt
+import mplleaflet
 
 
 def load_day(day):
@@ -15,7 +17,8 @@ def load_day(day):
              'vehicle_id': np.int32,
              'at_stop': np.int8}
     file_name = 'data/siri.201301{0:02d}.csv'.format(day)
-    df = pd.read_csv(file_name, header=None, names=header, dtype=types, parse_dates=['time_frame'], infer_datetime_format=True)
+    df = pd.read_csv(file_name, header=None, names=header, dtype=types, parse_dates=['time_frame'],
+                     infer_datetime_format=True)
     null_replacements = {'line_id': 0, 'stop_id': 0}
     df = df.fillna(value=null_replacements)
     df['line_id'] = df['line_id'].astype(np.int32)
@@ -55,7 +58,7 @@ def calculate_durations(data_frame, vehicle_id):
 
 
 def calculate_distances(data_frame, vehicle_id):
-    dv = data_frame[data_frame['vehicle_id']==vehicle_id]
+    dv = data_frame[data_frame['vehicle_id'] == vehicle_id]
     lat = dv.lat.values
     lon = dv.lon.values
     dxm = haversine_np(lon[1:], lat[1:], lon[:-1], lat[:-1])
@@ -65,13 +68,26 @@ def calculate_distances(data_frame, vehicle_id):
 
 
 def delta_location(lat, lon, bearing, meters):
+    """
+    Calculates a destination location from a starting location, a bearing and a distance in meters.
+    :param lat: Start latitude
+    :param lon: Start longitude
+    :param bearing: Bearing (North is zero degrees, measured clockwise)
+    :param meters: Distance to displace from the starting point
+    :return: Tuple with the new latitude and longitude
+    """
     delta = meters / 6378137.0
     theta = math.radians(bearing)
     lat_r = math.radians(lat)
     lon_r = math.radians(lon)
     lat_r2 = math.asin(math.sin(lat_r) * math.cos(delta) + math.cos(lat_r) * math.sin(delta) * math.cos(theta))
-    lon_r2 = lon_r + math.atan2(math.sin(theta) * math.sin(delta) * math.cos(lat_r), math.cos(delta) - math.sin(lat_r) * math.sin(lat_r2))
+    lon_r2 = lon_r + math.atan2(math.sin(theta) * math.sin(delta) * math.cos(lat_r),
+                                math.cos(delta) - math.sin(lat_r) * math.sin(lat_r2))
     return math.degrees(lat_r2), math.degrees(lon_r2)
+
+
+def delta_degree_to_meters(lat, lon, delta_lat=0, delta_lon=0):
+    return haversine_np(lon, lat, lon + delta_lon, lat + delta_lat)
 
 
 def x_meters_to_degrees(meters, lat, lon):
@@ -162,8 +178,25 @@ def get_line_text(lon0, lat0, lon1, lat1):
     return "\"LINE({0} {1}, {2}, {3})\"".format(lon0, lat0, lon1, lat1)
 
 
+def convert_speed(deg_per_sec_x, deg_per_sec_y, lat, lon):
+    """
+    Converts a speed in degrees per second decomposed in longitude and latitude components
+    into an absolute value measured in meters per second.
+    :param deg_per_sec_x: Speed along the longitude (x) axis
+    :param deg_per_sec_y: Speed along the latitude (y) axis
+    :param lat: Latitude of the location where the original speed is measured
+    :param lon: Longitude of the location where the original speed is measured
+    :return: Absolute value of the speed in meters per second.
+    """
+    ms_x = delta_degree_to_meters(lat, lon, delta_lon=deg_per_sec_x)
+    ms_y = delta_degree_to_meters(lat, lon, delta_lat=deg_per_sec_y)
+
+    ms = math.sqrt(ms_x * ms_x + ms_y * ms_y)
+    return ms
+
+
 def run():
-    day = load_day(1)
+    day = load_day(2)
     vehicles = day['vehicle_id'].unique()
 
     trajectories = {}
@@ -175,20 +208,24 @@ def run():
 
         trajectories[v] = day.loc[vehicle_selector, ['dt', 'lon', 'lat']].values
 
-    t = trajectories[33160]
+    t = trajectories[43004]
 
     prev_x = read_row(t, 0)
     lat = prev_x[1, 0]
     lon = prev_x[0, 0]
-    sigma_x = 0.1
-    sigma_s = 0.1
+    sigma_x = 10.0
+    sigma_s = 100.0
     c = np.zeros((2, 4), dtype=np.float)
     c[0, 0] = 1.0
     c[1, 1] = 1.0
     prev_p = calculate_p(lat, lon, sigma_x, sigma_s)
 
     # print("observed, filtered")
-    print("lat_obs, lon_obs, lat_flt, lon_flt")
+    print("lat_obs, lon_obs, lat_flt, lon_flt, speed_flt")
+
+    result = np.zeros((t.shape[0], 5), dtype=np.float64)
+    result[0, 0:4] = np.transpose(prev_x)
+    result[0, 2:4] = result[0, 0:2]
 
     for i in range(1, t.shape[0]):
         y = read_observation(t, i)
@@ -196,9 +233,25 @@ def run():
         next_x, next_p = predict_step(prev_x, prev_p, phi, sigma_s)
         updated_x, updated_p = update_step(next_x, next_p, c, y, sigma_x)
 
-        print("{0}, {1}, {2}, {3}".format(y[1, 0],  y[0, 0], updated_x[1, 0], updated_x[0, 0]))
+        speed_x = updated_x[2, 0]   # Longitude speed in degrees per second
+        speed_y = updated_x[3, 0]   # Latitude speed in degrees per second
+
+        px = y[0, 0]                # Longitude
+        py = y[1, 0]                # Latitude
+
+        ms = convert_speed(speed_x, speed_y, py, px) * 3.6  # Estimated speed in km/h
+
+        result[i, 0:2] = np.transpose(y)
+        result[i, 2:4] = np.transpose(updated_x[0:2, 0])
+        result[i, 4] = ms
+
+        print("{0}, {1}, {2}, {3}, {4}".format(*result[i, :]))
 
         prev_x, prev_p = updated_x, updated_p
+
+    plt.plot(result[:, 0], result[:, 1], "r")
+    plt.plot(result[:, 2], result[:, 3], "b")
+    mplleaflet.show()
 
 
 if __name__ == "__main__":

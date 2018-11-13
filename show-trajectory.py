@@ -17,12 +17,12 @@ def load_day(month):
 
 def run():
     df = load_day(1)
-    trip = df.loc[df['vehicle_id'] == 33142, ['timestamp', 'lat', 'lon', 'stop']]
+    trip = df.loc[df['line_id'] == 27, ['timestamp', 'lat', 'lon', 'stop']]
     stop = trip.loc[trip['stop'] == 1, ['timestamp', 'lat', 'lon']]
-    print.head())
+    print(df['line_id'].unique())
 
     plt.plot(stop['lon'], stop['lat'], 'rs')
-    print(stop.head())
+    # print(stop.head())
     # plt.plot(trip['lon'], trip['lat'])
     mplleaflet.show()
 
