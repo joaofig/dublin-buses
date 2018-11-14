@@ -196,8 +196,10 @@ def convert_speed(deg_per_sec_x, deg_per_sec_y, lat, lon):
 
 
 def run():
-    day = load_day(2)
+    day = load_day(1)
     vehicles = day['vehicle_id'].unique()
+
+    vehicle_id = 43004
 
     trajectories = {}
 
@@ -205,10 +207,12 @@ def run():
         vehicle_selector = day['vehicle_id'] == v
         day.loc[vehicle_selector, 'dt'] = calculate_durations(day, v)
         day.loc[vehicle_selector, 'dx'] = calculate_distances(day, v)
+        speed_selector = day.loc[vehicle_selector, 'dt'] > 0
+        # day.loc[speed_selector, 'speed'] = day[speed_selector].dx / day[speed_selector].dt * 3.6
 
         trajectories[v] = day.loc[vehicle_selector, ['dt', 'lon', 'lat']].values
 
-    t = trajectories[43004]
+    t = trajectories[vehicle_id]
 
     prev_x = read_row(t, 0)
     lat = prev_x[1, 0]
@@ -221,7 +225,7 @@ def run():
     prev_p = calculate_p(lat, lon, sigma_x, sigma_s)
 
     # print("observed, filtered")
-    print("lat_obs, lon_obs, lat_flt, lon_flt, speed_flt")
+    # print("lat_obs, lon_obs, lat_flt, lon_flt, speed_flt")
 
     result = np.zeros((t.shape[0], 5), dtype=np.float64)
     result[0, 0:4] = np.transpose(prev_x)
@@ -245,13 +249,23 @@ def run():
         result[i, 2:4] = np.transpose(updated_x[0:2, 0])
         result[i, 4] = ms
 
-        print("{0}, {1}, {2}, {3}, {4}".format(*result[i, :]))
+        # print("{0}, {1}, {2}, {3}, {4}".format(*result[i, :]))
 
         prev_x, prev_p = updated_x, updated_p
 
-    plt.plot(result[:, 0], result[:, 1], "r")
-    plt.plot(result[:, 2], result[:, 3], "b")
-    mplleaflet.show()
+    out_columns = ['lon', 'lat', 'flt_lon', 'flt_lat', 'speed']
+
+    df = day.loc[day['vehicle_id'] == vehicle_id, ['timestamp', 'stop_id', 'at_stop', 'delay']]
+    flt = pd.DataFrame(data=result, columns=out_columns, index=df.index.values)
+    df = pd.concat([df, flt], axis=1)
+
+    df.to_csv('data/speed.csv', index=False)
+
+    # print(df.head(10))
+
+    # plt.plot(result[:, 0], result[:, 1], "r")
+    # plt.plot(result[:, 2], result[:, 3], "b")
+    # mplleaflet.show()
 
 
 if __name__ == "__main__":
