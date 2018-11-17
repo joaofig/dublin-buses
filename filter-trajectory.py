@@ -207,8 +207,8 @@ def run():
         vehicle_selector = day['vehicle_id'] == v
         day.loc[vehicle_selector, 'dt'] = calculate_durations(day, v)
         day.loc[vehicle_selector, 'dx'] = calculate_distances(day, v)
-        speed_selector = day.loc[vehicle_selector, 'dt'] > 0
-        # day.loc[speed_selector, 'speed'] = day[speed_selector].dx / day[speed_selector].dt * 3.6
+        # speed_selector = day.loc[vehicle_selector, 'dt'] > 0
+        day.loc[vehicle_selector, 'speed'] = day[vehicle_selector].dx / day[vehicle_selector].dt * 3.6
 
         trajectories[v] = day.loc[vehicle_selector, ['dt', 'lon', 'lat']].values
 
@@ -245,6 +245,7 @@ def run():
 
         ms = convert_speed(speed_x, speed_y, py, px) * 3.6  # Estimated speed in km/h
 
+        # Pack the row data
         result[i, 0:2] = np.transpose(y)
         result[i, 2:4] = np.transpose(updated_x[0:2, 0])
         result[i, 4] = ms
@@ -253,9 +254,9 @@ def run():
 
         prev_x, prev_p = updated_x, updated_p
 
-    out_columns = ['lon', 'lat', 'flt_lon', 'flt_lat', 'speed']
+    out_columns = ['lon', 'lat', 'flt_lon', 'flt_lat', 'speed_flt']
 
-    df = day.loc[day['vehicle_id'] == vehicle_id, ['timestamp', 'stop_id', 'at_stop', 'delay']]
+    df = day.loc[day['vehicle_id'] == vehicle_id, ['timestamp', 'stop_id', 'at_stop', 'delay', 'speed']]
     flt = pd.DataFrame(data=result, columns=out_columns, index=df.index.values)
     df = pd.concat([df, flt], axis=1)
 
