@@ -43,7 +43,7 @@ def pandas_load_day(day):
     df = df.fillna(value=null_replacements)
     df['line_id'] = df['line_id'].astype(np.int32)
     df['stop_id'] = df['stop_id'].astype(np.int32)
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='us')
+    # df['timestamp'] = pd.to_datetime(df['timestamp'], unit='us')
     return df
 
 
