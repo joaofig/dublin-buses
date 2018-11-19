@@ -30,25 +30,28 @@ def get_move_ability_array(source: np.ndarray, index: int, window=4) -> np.ndarr
     if 0 <= index < window:
         # The index lies on the left window
         result = np.full(n, source[0])
-        result[index+1:] = source[index+1:n+1]
-    elif source_size-window <= index < source_size:
+        result[window - index:] = source[:window + index + 1]
+    elif source_size - window <= index < source_size:
         # The index lies in the right window
         result = np.full(n, source[-1])
-        fill = source[index-window:]
-        result[:fill.shape[0]] = fill
+        a = source_size - index - 1
+        result[:window + a + 1] = source[index - window:index + a + 1]
     else:
-        result = source[index-window:index+window+1]
+        result = source[index - window:index + window + 1]
     return result
 
 
 def run():
-    for i in range(1, 32):
-        print(i)
-        day = pandas_load_day(i)
-        stops = day.loc[day['at_stop'] == 1, ['lat', 'lon', 'stop_id']]
-
-        file_name = 'data/stops{0:02d}.csv'.format(i)
-        stops.to_csv(file_name, index=False)
+    a = np.arange(100)
+    for i in range(100):
+        print(i, get_move_ability_array(a, i))
+    # for i in range(1, 32):
+    #     print(i)
+    #     day = pandas_load_day(i)
+    #     stops = day.loc[day['at_stop'] == 1, ['lat', 'lon', 'stop_id']]
+    #
+    #     file_name = 'data/stops{0:02d}.csv'.format(i)
+    #     stops.to_csv(file_name, index=False)
 
 
 if __name__ == '__main__':
