@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import math
+import os.path
 import matplotlib.pyplot as plt
 import mplleaflet
 
@@ -264,9 +265,9 @@ def run():
 
     # print(df.head(10))
 
-    # plt.plot(result[:, 0], result[:, 1], "r")
-    # plt.plot(result[:, 2], result[:, 3], "b")
-    # mplleaflet.show()
+    plt.plot(result[:, 0], result[:, 1], "r")
+    plt.plot(result[:, 2], result[:, 3], "b")
+    mplleaflet.show()
 
 
 if __name__ == "__main__":

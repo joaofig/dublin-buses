@@ -1,5 +1,18 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import mplleaflet
+from shapely.geometry import Point
+from functools import partial
+from shapely.ops import transform
+from shapely.ops import cascaded_union
+from shapely.ops import transform
+from shapely.ops import cascaded_union
+import pyproj
+import math
+from sklearn.cluster import DBSCAN
+import os.path
 
 
 def pandas_load_day(day):
@@ -20,8 +33,29 @@ def pandas_load_day(day):
     df = df.fillna(value=null_replacements)
     df['line_id'] = df['line_id'].astype(np.int32)
     df['stop_id'] = df['stop_id'].astype(np.int32)
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='us')
+    # df['timestamp'] = pd.to_datetime(df['timestamp'], unit='us')
     return df
+
+
+def create_radian_columns(df):
+    df['rad_lng'] = np.radians(df['lon'].values)
+    df['rad_lat'] = np.radians(df['lat'].values)
+    return df
+
+
+def buffer_in_meters(lng, lat, radius):
+    proj_meters = pyproj.Proj(init='epsg:3857')
+    proj_latlng = pyproj.Proj(init='epsg:4326')
+
+    project_to_meters = partial(pyproj.transform, proj_latlng, proj_meters)
+    project_to_latlng = partial(pyproj.transform, proj_meters, proj_latlng)
+
+    pt_latlng = Point(lng, lat)
+    pt_meters = transform(project_to_meters, pt_latlng)
+
+    buffer_meters = pt_meters.buffer(radius)
+    buffer_latlng = transform(project_to_latlng, buffer_meters)
+    return buffer_latlng
 
 
 def haversine_np(lon1, lat1, lon2, lat2):
@@ -42,6 +76,31 @@ def haversine_np(lon1, lat1, lon2, lat2):
     c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
     meters = 6378137.0 * c
     return meters
+
+
+def generate_blob_clusters(df, eps_in_meters=50):
+    # Group the observations by cluster identifier
+    groups = df.groupby('Cluster')
+    clusters = list()
+    blobs = list()
+    counts = list()
+
+    for cluster_id, points in groups:
+        if cluster_id >= 0:
+            buffer_radius = eps_in_meters * 0.6
+            buffers = [buffer_in_meters(lon, lat, buffer_radius)
+                       for lon, lat in zip(points['lon'], points['lat'])]
+            blob = cascaded_union(buffers)
+            blobs.append(blob)
+            clusters.append(cluster_id)
+            counts.append(len(points))
+
+    # Create the GeoDataFrame from the cluster numbers and blobs
+    data = {'cluster': clusters, 'polygon': blobs, 'count': counts}
+
+    cluster_gdf = gpd.GeoDataFrame(pd.DataFrame(data), geometry='polygon')
+    cluster_gdf.crs = {'init': 'epsg:4326'}
+    return cluster_gdf
 
 
 def get_move_ability_array(source: np.ndarray, index: int, window=4) -> np.ndarray:
@@ -74,6 +133,10 @@ def trajectory_direct_distance(latitudes: np.ndarray, longitudes: np.ndarray) ->
 
 def get_move_ability(df: pd.DataFrame, columns=['lat', 'lon']) -> np.ndarray:
     locations = np.transpose(df[columns].values)
+
+    if locations.shape[1] < 9:
+        return np.zeros(locations.shape[1])
+
     move_ability = []
     for i in range(locations.shape[1]):
         lats = get_move_ability_array(locations[0, :], i)
@@ -90,6 +153,22 @@ def get_move_ability(df: pd.DataFrame, columns=['lat', 'lon']) -> np.ndarray:
     return np.array(move_ability)
 
 
+def density_cluster(df, eps_in_meters=50):
+    num_samples = 15
+    earth_perimeter = 40070000.0  # In meters
+    eps_in_radians = eps_in_meters / earth_perimeter * (2 * math.pi)
+
+    db_scan = DBSCAN(eps=eps_in_radians, min_samples=num_samples, metric='haversine')
+    return db_scan.fit_predict(df[['rad_lat', 'rad_lng']])
+
+
+def show_blob_map(data_frame):
+    gdf = generate_blob_clusters(data_frame)
+    ax = gdf.geometry.plot(linewidth=2.0, color='red', edgecolor='red', alpha=0.5)
+    # plt.show()
+    mplleaflet.show(fig=ax.figure)
+
+
 def run():
     # a = np.arange(100)
     # for i in range(100):
@@ -102,15 +181,50 @@ def run():
     #     file_name = 'data/stops{0:02d}.csv'.format(i)
     #     stops.to_csv(file_name, index=False)
 
-    df = pandas_load_day(1)
-    df['move_ability'] = 0.0
+    day = 3
 
-    vehicles = df['vehicle_id'].unique()
+    out_file_name = 'data/move_ability_201301{0:02d}.csv'.format(day)
 
-    for v in vehicles:
-        vehicle = df[df['vehicle_id'] == v]
-        move_ability = get_move_ability(vehicle)
-        df.loc[df['vehicle_id'] == v, 'move_ability'] = move_ability
+    if os.path.exists(out_file_name):
+        types = {'timestamp': np.int64,
+                 'journey_id': np.int32,
+                 'congestion': np.int8,
+                 'lon': np.float64,
+                 'lat': np.float64,
+                 'delay': np.int8,
+                 'vehicle_id': np.int32,
+                 'at_stop': np.int8}
+        df = pd.read_csv(out_file_name, dtype=types, parse_dates=['time_frame'],
+                         infer_datetime_format=True)
+    else:
+        df = pandas_load_day(day)
+        df['move_ability'] = 0.0
+
+        vehicles = df['vehicle_id'].unique()
+
+        for v in vehicles:
+            print(v)
+            vehicle = df[df['vehicle_id'] == v]
+            move_ability = get_move_ability(vehicle)
+            df.loc[df['vehicle_id'] == v, 'move_ability'] = move_ability
+
+        df.to_csv(out_file_name, index=False)
+
+    hist = df.loc[df['move_ability'] >= 0.0, 'move_ability'].plot.kde()
+    plt.show(hist)
+
+    low_move_ability = (df['move_ability'] >= 0.0) & (df['move_ability'] < 0.3)
+    ma = df[low_move_ability].copy()
+
+    ma = create_radian_columns(ma)
+    ma['Cluster'] = density_cluster(ma, eps_in_meters=25)
+
+    # Filter out the noise points and retain only the clusters
+    cluster_points = ma.loc[ma['Cluster'] > -1, ['Cluster', 'lat', 'lon']]
+
+    show_blob_map(cluster_points)
+    # plt.scatter(df.loc[low_move_ability, 'lon'], df.loc[low_move_ability, 'lat'])
+    # mplleaflet.show()
 
 
 if __name__ == '__main__':
