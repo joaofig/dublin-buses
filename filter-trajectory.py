@@ -110,8 +110,8 @@ def calculate_q(lat, lon, sigma_speed):
 
 def calculate_r(lat, lon, sigma):
     r = np.zeros((2, 2), dtype=np.float)
-    r[0, 0] = x_meters_to_degrees(lat, lon, sigma)
-    r[1, 1] = y_meters_to_degrees(lat, lon, sigma)
+    r[0, 0] = x_meters_to_degrees(lat, lon, sigma) ** 2
+    r[1, 1] = y_meters_to_degrees(lat, lon, sigma) ** 2
     return r
 
 
